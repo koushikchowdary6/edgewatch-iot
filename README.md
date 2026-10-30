@@ -74,7 +74,7 @@ recommendations. No physical actuator control is performed.
 python -m unittest discover -s . -v
 ```
 
-Run this from the repository root. Ten tests cover replay, conflicts, alerts, invalid inputs, restart persistence,
+Run this from the repository root. Fifteen tests cover replay, conflicts, alerts, invalid inputs, restart persistence,
 real HTTP/outbox authentication, quarantine, and failure preservation.
 
 ## Interview walkthrough
@@ -98,3 +98,14 @@ flowchart TD
 
 See [PROVENANCE.md](PROVENANCE.md) for the exact upstream snapshot and file mapping.
 The existing upstream license is retained unchanged; no new license grant is introduced.
+
+## Replay acknowledgment and write failures
+
+A 200/201 HTTP status alone does not dequeue a reading. The receiver must return
+bounded JSON with boolean `accepted` and `duplicate` fields, exactly one true.
+Malformed, contradictory, oversized or missing acknowledgments retain the queue.
+An offline or unsuccessful attempt does not rewrite the outbox. When records
+are processed, the client stages the remaining queue in a unique private file,
+flushes and fsyncs it, then atomically replaces the outbox. A replace failure
+preserves the previous queue so accepted records can be safely replayed.
+This remains single-writer, with no power-loss or malicious-server guarantee.
