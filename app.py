@@ -179,7 +179,10 @@ def handler(db_path, key, config=None):
             self.reply(code, {'error': {'code': name, 'message': message}, 'request_id': self.request_id})
 
         def authorized(self):
-            return hmac.compare_digest(self.headers.get('X-API-Key', '').encode('utf-8'), key.encode('ascii'))
+            # Multiple authentication headers can be interpreted differently
+            # by intermediaries. Reject them instead of accepting the first.
+            supplied = self.headers.get_all('X-API-Key', [])
+            return len(supplied) == 1 and hmac.compare_digest(supplied[0].encode('utf-8'), key.encode('ascii'))
 
         def do_GET(self):
             if self.path == '/':
@@ -201,8 +204,16 @@ def handler(db_path, key, config=None):
                 return self.error(404, 'not_found', 'Route does not exist')
             if not self.authorized():
                 return self.error(401, 'unauthorized', 'Valid X-API-Key required')
+            # Ambiguous framing can make a proxy and this receiver disagree
+            # about which bytes belong to a telemetry event. Never read a
+            # body with duplicate lengths or any Transfer-Encoding header.
+            lengths = self.headers.get_all('Content-Length', [])
+            if (self.headers.get_all('Transfer-Encoding')
+                    or len(lengths) != 1 or len(lengths[0]) > 10
+                    or not lengths[0].isascii() or not lengths[0].isdecimal()):
+                return self.error(400, 'invalid_framing', 'Exactly one decimal Content-Length required; Transfer-Encoding unsupported')
             try:
-                length = int(self.headers.get('Content-Length', '0'))
+                length = int(lengths[0])
                 if not 0 < length <= 4096:
                     return self.error(413, 'body_limit', 'Body must be 1..4096 bytes')
                 if self.headers.get('Transfer-Encoding'):
