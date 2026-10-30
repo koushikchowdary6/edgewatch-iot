@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import tempfile
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -41,6 +42,20 @@ def flush(path, url, key, quarantine=None):
             with urllib.request.urlopen(request, timeout=5) as response:
                 if response.status not in (200, 201):
                     break
+                # A proxy/login page can return 200 without storing telemetry.
+                # Only an explicit receiver acknowledgment permits dequeueing.
+                try:
+                    body = response.read(4097)
+                    if len(body) > 4096:
+                        break
+                    ack = json.loads(body)
+                except (ValueError, UnicodeError):
+                    break
+                if (not isinstance(ack, dict)
+                        or type(ack.get('accepted')) is not bool
+                        or type(ack.get('duplicate')) is not bool
+                        or ack['accepted'] == ack['duplicate']):
+                    break
         except urllib.error.HTTPError as error:
             # Invalid payloads cannot succeed on retry without intervention.
             # Auth, concurrency, rate-limit and server failures stay queued.
@@ -53,9 +68,19 @@ def flush(path, url, key, quarantine=None):
             break
         sent += 1
         processed += 1
-    temp = path.with_suffix('.tmp')
-    temp.write_text('\n'.join(records[processed:]) + ('\n' if records[processed:] else ''))
-    temp.replace(path)
+    if not processed:
+        return sent
+    # Unique same-directory staging avoids a predictable .tmp collision.
+    fd, temporary = tempfile.mkstemp(prefix='.outbox-', dir=path.parent)
+    temp = Path(temporary)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write('\n'.join(records[processed:]) + ('\n' if records[processed:] else ''))
+            stream.flush()
+            os.fsync(stream.fileno())
+        temp.replace(path)
+    finally:
+        temp.unlink(missing_ok=True)
     return sent
 
 
