@@ -35,6 +35,14 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def aware_utc(value, name):
+    """Reject ambiguous local-time datetimes before persisting health clocks."""
+    if (not isinstance(value, datetime) or value.tzinfo is None
+            or value.utcoffset() is None):
+        raise ValueError(f'{name} must be a timezone-aware datetime')
+    return value.astimezone(timezone.utc)
+
+
 def connect(path):
     db = sqlite3.connect(path, timeout=5)
     db.execute('PRAGMA foreign_keys=ON')
@@ -74,7 +82,7 @@ def ingest(db, sample, config=None, received_at=None):
     if ts.tzinfo is None:
         raise ValueError('Timestamp needs timezone')
     ts = ts.astimezone(timezone.utc).isoformat()
-    received = (received_at or utcnow()).astimezone(timezone.utc).isoformat()
+    received = aware_utc(received_at if received_at is not None else utcnow(), 'received_at').isoformat()
     flags = []
     if sample['temperature'] > config.temperature_high:
         flags.append(('HIGH_TEMPERATURE', sample['temperature'], config.temperature_high))
@@ -105,7 +113,8 @@ def snapshot(db):
 
 
 def overview(db, config=None, now=None):
-    config, now = config or Config(), now or utcnow()
+    config = config or Config()
+    now = aware_utc(now if now is not None else utcnow(), 'now')
     devices = []
     for device, seen, seq in db.execute('SELECT s.device,d.last_seen,d.last_seq FROM (SELECT DISTINCT device FROM samples) s LEFT JOIN devices d ON s.device=d.device ORDER BY s.device'):
         age = max(0, (now - datetime.fromisoformat(seen)).total_seconds()) if seen else None
