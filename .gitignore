@@ -1,0 +1,12 @@
+__pycache__/
+*.sqlite3
+*.sqlite3-*
+*.jsonl
+*.tmp
+
+.venv/
+.pytest_cache/
+*.pyc
+.env
+bundles/
+released/
