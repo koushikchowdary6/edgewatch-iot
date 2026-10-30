@@ -32,3 +32,9 @@ class HttpContractTests(unittest.TestCase):
     def test_overview_requires_authentication(self):
         with self.assertRaises(urllib.error.HTTPError) as caught:urllib.request.urlopen(self.url+'/api/overview')
         self.assertEqual(caught.exception.code,401)
+
+    def test_deeply_nested_json_returns_structured_error(self):
+        request=urllib.request.Request(self.url+'/api/samples',b'['*1500+b']'*1500,{'X-API-Key':'x'*16})
+        with self.assertRaises(urllib.error.HTTPError) as caught:urllib.request.urlopen(request)
+        self.assertEqual(caught.exception.code,400)
+        self.assertEqual(json.load(caught.exception)['error']['code'],'invalid_telemetry')

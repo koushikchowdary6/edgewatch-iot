@@ -122,7 +122,7 @@ process-liveness probe; it does not certify storage readiness.
 python -m unittest discover -s . -v
 ```
 
-**29 tests passed locally** for this feature, including concurrent duplicate delivery,
+**30 tests passed locally** for this feature, including concurrent duplicate delivery,
 restart persistence, receipt-clock health, rule changes, invalid JSON, auth/error
 contracts, replay write failures, bounded retry and a real HTTP outage/reconnect demo.
 [GitHub Actions](https://github.com/koushikchowdary6/edgewatch-iot/actions/workflows/ci.yml)

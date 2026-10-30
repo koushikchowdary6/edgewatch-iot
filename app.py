@@ -202,7 +202,7 @@ def handler(db_path, key, config=None):
                 with connect(db_path) as db:
                     result = ingest(db, sample, config)
                 self.reply(201 if result['accepted'] else 200, result)
-            except (ValueError, TypeError, KeyError, OverflowError):
+            except (ValueError, TypeError, KeyError, OverflowError, RecursionError):
                 self.error(400, 'invalid_telemetry', 'Invalid telemetry or conflicting replay')
             except sqlite3.Error:
                 self.error(503, 'storage_unavailable', 'Storage unavailable; retry unchanged event')
