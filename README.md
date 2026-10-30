@@ -107,6 +107,7 @@ process-liveness probe; it does not certify storage readiness.
   commit together. Concurrent retries serialize around the unique device/sequence key.
 - Configurable, persistent alerts capture **the threshold at ingestion**; normal
   recovery readings do not erase history. Threshold changes do not invalidate replay.
+- Ingestion receipt clocks and injected health-snapshot clocks must be timezone-aware `datetime` values; offsets are normalized to UTC. Naive local-time clocks are rejected rather than silently interpreted in the server's local timezone.
 - Receipt-based health has healthy, stale, offline and unknown states. Migrated
   readings without receipt timestamps stay unknown; the system does not invent history.
 - Strict finite measurements, timezone-aware timestamps, exact fields, duplicate-key
