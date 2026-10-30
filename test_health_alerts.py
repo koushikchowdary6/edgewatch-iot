@@ -19,6 +19,26 @@ class HealthAlertsTests(unittest.TestCase):
             with self.subTest(age=age):
                 self.assertEqual(overview(self.db,now=NOW+timedelta(seconds=age))['devices'][0]['status'],status)
 
+    def test_naive_and_invalid_ingestion_receipt_clocks_fail_before_writing(self):
+        for value in [datetime(2026, 1, 1), '2026-01-01T00:00:00Z', 0]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                ingest(self.db, SAMPLE, received_at=value)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM samples').fetchone()[0], 0)
+        self.assertEqual(self.db.execute('SELECT COUNT(*) FROM devices').fetchone()[0], 0)
+
+    def test_naive_health_snapshot_clock_is_rejected(self):
+        ingest(self.db, SAMPLE, received_at=NOW)
+        for value in [datetime(2026, 1, 1), '2026-01-01', 0]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                overview(self.db, now=value)
+
+    def test_offset_aware_receipt_is_normalized_to_utc(self):
+        offset = timezone(timedelta(hours=5, minutes=30))
+        ingest(self.db, SAMPLE, received_at=datetime(2026, 1, 1, 5, 30, tzinfo=offset))
+        state = overview(self.db, now=NOW)
+        self.assertEqual(state['devices'][0]['last_seen'], NOW.isoformat())
+        self.assertEqual(state['devices'][0]['status'], 'healthy')
+
     def test_replay_after_threshold_change_does_not_conflict_or_add_alert(self):
         ingest(self.db,SAMPLE,received_at=NOW)
         self.assertTrue(ingest(self.db,SAMPLE,Config(temperature_high=80))['duplicate'])
