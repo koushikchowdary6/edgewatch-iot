@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import tempfile
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -84,11 +85,29 @@ def flush(path, url, key, quarantine=None):
     return sent
 
 
+def replay_until(path, url, key, attempts=3, delay=0.25, quarantine=None):
+    """Bounded retry of retained records. One writer per outbox; no background daemon."""
+    if type(attempts) is not int or not 1 <= attempts <= 20:
+        raise ValueError('Attempts must be 1..20')
+    if type(delay) not in (int, float) or not 0 <= delay <= 30:
+        raise ValueError('Retry delay must be 0..30 seconds')
+    total = 0
+    for attempt in range(attempts):
+        total += flush(path, url, key, quarantine)
+        if not Path(path).read_text().strip():
+            break
+        if attempt + 1 < attempts:
+            time.sleep(delay * min(2 ** attempt, 4))
+    return total
+
+
 if __name__ == '__main__':
     p = argparse.ArgumentParser()
     p.add_argument('--url', default='http://127.0.0.1:8080')
     p.add_argument('--outbox', type=Path, default=Path('outbox.jsonl'))
     p.add_argument('--quarantine', type=Path, help='Opt in to quarantining HTTP 400/413 records')
+    p.add_argument('--attempts', type=int, default=3)
+    p.add_argument('--retry-delay', type=float, default=0.25)
     p.add_argument('--seed', action='store_true')
     a = p.parse_args()
     if a.seed:
@@ -97,4 +116,5 @@ if __name__ == '__main__':
         now = datetime.now(timezone.utc).isoformat()
         a.outbox.write_text(''.join(json.dumps(dict(device='sim-esp32', seq=i, ts=now,
             temperature=72 if i == 8 else 24 + i / 10, voltage=3.0 if i == 9 else 3.8)) + '\n' for i in range(10)))
-    print({'sent': flush(a.outbox, a.url, os.environ.get('EDGEWATCH_KEY', ''), a.quarantine)})
+    print({'sent': replay_until(a.outbox, a.url, os.environ.get('EDGEWATCH_KEY', ''), a.attempts, a.retry_delay, a.quarantine),
+           'pending_lines': len(a.outbox.read_text().splitlines())})

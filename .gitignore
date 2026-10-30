@@ -10,3 +10,7 @@ __pycache__/
 .env
 bundles/
 released/
+demo-data/
+demo-repeat/
+demo-ci/
+.outbox-*

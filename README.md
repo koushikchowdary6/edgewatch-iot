@@ -1,111 +1,160 @@
-# EdgeWatch — IoT telemetry and replay monitor
+# EdgeWatch IoT
 
-A runnable software-only device-monitoring project: a synthetic ESP32-like
-producer sends readings through an HTTP API into SQLite; a browser dashboard
-shows recent readings and threshold alerts. Alerts are deterministic rules, not ML predictions.
+[![CI](https://github.com/koushikchowdary6/edgewatch-iot/actions/workflows/ci.yml/badge.svg)](https://github.com/koushikchowdary6/edgewatch-iot/actions/workflows/ci.yml)
 
-## Run (Python 3.10+, standard library only)
+**A Python telemetry reliability lab that keeps readings through connectivity loss
+and safely replays them after recovery.** An authenticated HTTP receiver stores
+idempotent events, device health, alert history and ingestion counters in SQLite.
+A live browser dashboard makes the recovery observable.
 
-From the repository root:
+Software-only: the producer simulates a device. Alerts use deterministic thresholds;
+there is no hardware integration, machine-learning model or deployed fleet claim.
+
+## Quickstart: Run in 5 Minutes
+
+Python **3.10+**, standard library only. From a terminal:
 
 ```bash
+git clone https://github.com/koushikchowdary6/edgewatch-iot.git
 cd edgewatch-iot
-export EDGEWATCH_KEY="$(python -c 'import secrets; print(secrets.token_hex(24))')"
-python app.py
+python demo.py
 ```
 
-In another terminal, set **the same** EDGEWATCH_KEY, then:
+The demo uses a fresh `demo-data/` directory. Copy the **session API key printed in
+the terminal**, open **http://127.0.0.1:8080**, enter the key and click **Connect**.
+No key is stored in browser storage. Choose another directory/port to repeat:
 
 ```bash
-cd edgewatch-iot
-python replay.py --seed
+python demo.py --output demo-repeat --port 8081
 ```
 
-Open http://127.0.0.1:8080, enter the API key, and select Refresh telemetry.
-The seed produces 10 synthetic readings: one high-temperature and one
-low-voltage alert. Restart the receiver to verify readings persist.
+The demo actually starts the HTTP server, sends a reading, stops the server,
+buffers three readings, fails delivery, restarts against the same database, replays,
+and retries the accepted events again. Expected terminal evidence:
 
-## Failure demo
+```text
+OUTAGE: 3 readings retained in the device outbox
+RECOVERED: {"stored_readings": 4, "stored_alerts": 1, "duplicate_retries": 3, "pending_outbox_lines": 0}
+```
 
-1. Stop the server; run `python replay.py --seed --outbox offline.jsonl`.
-2. The connection fails; the outbox retains all 10 readings.
-3. Restart the server; run `python replay.py --outbox offline.jsonl`.
-4. Already accepted sequences are acknowledged without duplicate rows.
-5. Reusing a sequence with changed measurements is rejected.
+Inspect **4 stored readings**, **3 duplicate retries**, and the **72°C high-temperature
+alert** on the dashboard. With the demo's short timeouts, health becomes stale after
+5 seconds and offline after 15. Ctrl-C stops the server. The database and
+`demo-result.json` remain for inspection. Server health reflects receipt of new events;
+old buffered events arriving now can make receipt health fresh even if sensor time is old.
 
-The producer removes acknowledged lines by replacing its outbox. If it crashes
-after server acceptance but before replacement, replay is safe because the
-server's `(device, seq)` key is unique. Use one producer per outbox. Sequence
-numbers must persist across device restarts in a real adapter. By default, a permanent HTTP 400/413 rejection stops replay and preserves
-that record and everything after it. To explicitly quarantine permanently
-rejected records and continue with later valid readings, use:
+For an automated end-to-end run without leaving a server running:
 
 ```bash
-python replay.py --outbox offline.jsonl --quarantine rejected.jsonl
+python demo.py --no-serve --port 0 --output demo-ci
 ```
-
-The quarantine JSONL records the original telemetry line and HTTP status.
-Treat it as sensitive operational data; do not commit it. Newly created
-quarantine files use owner-only permissions on POSIX. A failed quarantine
-write leaves the outbox intact, and 401/403 authentication, 409 concurrency,
-429 rate-limit, and 5xx errors always stop replay without quarantine.
-Quarantine is not exactly-once: a crash after appending to quarantine but
-before rewriting the outbox may produce a duplicate quarantine entry.
-Review and repair rejected records before reintroducing them to the outbox.
-
-## Architecture and constraints
-
-Producer JSONL outbox → authenticated HTTP receiver → SQLite → dashboard.
-The API caps request bodies at 4 KiB, validates finite numeric measurements,
-requires timezone-aware timestamps, and retains the newest 200 rows in the UI.
-The database retains all rows; retention is not implemented. Dashboard keys
-remain in memory, with no browser storage. The HTTP server binds localhost.
-
-This is a local development server, not an internet deployment. TLS, per-device
-identity, rate limits, request deadlines, fleet provisioning, MQTT, retention,
-physical sensors and load testing are not implemented. The outbox is file-based
-and single-writer; SQLite serializes writes, and concurrent retries can receive
-a conflict response. Thresholds (60°C / 3.2V) are illustrative, not battery safety
-recommendations. No physical actuator control is performed.
-
-## Verify
-
-```bash
-python -m unittest discover -s . -v
-```
-
-Run this from the repository root. Fifteen tests cover replay, conflicts, alerts, invalid inputs, restart persistence,
-real HTTP/outbox authentication, quarantine, and failure preservation.
-
-## Interview walkthrough
-
-Show a reading in the dashboard, stop the server, retain an outbox, restart and
-replay it. Explain why HTTP acknowledgment alone cannot guarantee exactly-once
-transport, and how an idempotency key provides one stored row per device event.
-Then discuss permanent-failure handling and migrating to per-device credentials.
 
 ## Architecture
 
 ```mermaid
 flowchart TD
-  A["Synthetic device / JSONL outbox"] --> B["HTTP receiver"]
-  B --> C["SQLite telemetry"]
-  C --> D["Browser dashboard"]
-  A --> E["Opt-in quarantine"]
+  A["Simulated device / JSONL outbox"] --> B["Authenticated HTTP receiver"]
+  B --> C["SQLite: events, health, alerts, counters"]
+  C --> D["Live browser dashboard"]
+  B --> E["Structured request logs"]
+  A --> F["Opt-in rejection quarantine"]
 ```
+
+## Run the components separately
+
+Set a local key of at least 16 ASCII characters in both terminals. Example for
+bash/WSL; generate your own random value rather than reusing an example key:
+
+```bash
+export EDGEWATCH_KEY="$(python -c 'import secrets; print(secrets.token_hex(24))')"
+python app.py --temperature-high 60 --voltage-low 3.2 --stale-seconds 30 --offline-seconds 120
+```
+
+In another terminal with **the same key**:
+
+```bash
+python replay.py --seed --outbox device.jsonl --attempts 3 --retry-delay 0.25
+```
+
+`--seed` refuses existing outboxes. To resend retained readings, omit `--seed`.
+Retries are bounded (1–20 attempts; capped exponential delay). Authentication,
+rate-limit, conflict and server failures stay queued. Optional
+`--quarantine rejected.jsonl` moves HTTP 400/413 records aside before proceeding;
+quarantine contains original telemetry and must stay local. One writer per outbox.
+
+Sample POST `/api/samples` with `X-API-Key` and JSON:
+
+```json
+{"device":"sim-esp32","seq":42,"ts":"2026-01-01T00:00:00+00:00","temperature":72,"voltage":3.8}
+```
+
+First response is HTTP 201:
+
+```json
+{"accepted":true,"duplicate":false,"alert":"HIGH_TEMPERATURE"}
+```
+
+An identical retry returns HTTP 200 with `accepted:false, duplicate:true`.
+A changed payload using the same device/sequence returns HTTP 400. Errors expose a
+stable code and request ID; they never echo submitted values or credentials.
+Authenticated `GET /api/overview` returns device health, the latest 200 readings,
+100 alert events, persistent counters and active thresholds. `/healthz` is a
+process-liveness probe; it does not certify storage readiness.
+
+## Verified engineering behavior
+
+- Atomic ingestion: event, device receipt time, alert evidence and accepted counter
+  commit together. Concurrent retries serialize around the unique device/sequence key.
+- Configurable, persistent alerts capture **the threshold at ingestion**; normal
+  recovery readings do not erase history. Threshold changes do not invalidate replay.
+- Receipt-based health has healthy, stale, offline and unknown states. Migrated
+  readings without receipt timestamps stay unknown; the system does not invent history.
+- Strict finite measurements, timezone-aware timestamps, exact fields, duplicate-key
+  rejection and a 4 KiB request budget. API authentication uses constant-time comparison.
+- Queue records are removed only after a valid bounded JSON acknowledgment.
+  Unique, flushed staging files preserve the old outbox if replacement fails.
+- JSON logs contain request ID, method, status and latency, **not** API keys or payloads.
+  Dashboard counters distinguish stored events, duplicate retries and rejected POSTs.
+
+## Tests and CI
+
+```bash
+python -m unittest discover -s . -v
+```
+
+**29 tests passed locally** for this feature, including concurrent duplicate delivery,
+restart persistence, receipt-clock health, rule changes, invalid JSON, auth/error
+contracts, replay write failures, bounded retry and a real HTTP outage/reconnect demo.
+[GitHub Actions](https://github.com/koushikchowdary6/edgewatch-iot/actions/workflows/ci.yml)
+runs the suite on Python 3.10 and 3.12. The badge reflects main, not an unmerged branch.
+
+## Engineering decisions and tradeoffs
+
+The hard part is keeping a transport retry from becoming a duplicate side effect,
+and distinguishing sensor event time from receiver receipt time. A unique key plus a
+SQLite transaction provides one stored row per event, not exactly-once transport.
+The outbox is single-writer; server acceptance before a client crash can cause replay,
+which ingestion deduplicates. A quarantine append can be repeated after a crash.
+
+SQLite and the standard library make the demo reproducible without services, Docker
+or cloud credentials. They trade fleet scale, per-device identity and production HTTP
+hardening for inspectability. This server binds localhost, sets body/socket limits,
+and uses a shared API key. It lacks TLS, rate limiting, key rotation, device provisioning,
+background workers and retention policies. Do not expose it directly to the internet.
+The dashboard cannot know client outbox depth. Its trend mixes recent devices; it is
+an illustrative received-temperature trend, not a per-device analytical chart.
+The fsynced staging file and atomic rename do not promise power-loss durability of
+parent directories. Thresholds are illustrative, not battery safety advice.
+
+## How I'd explain this in an interview
+
+“I built a small receiver and device outbox to make failure handling visible.
+I can stop delivery, preserve events, restart the receiver, replay twice and show
+that readings and alert history remain deduplicated. The key design choices are
+transactional ingestion, receipt-based health, and explicit acknowledgment validation.”
 
 ## Provenance
 
-See [PROVENANCE.md](PROVENANCE.md) for the exact upstream snapshot and file mapping.
-The existing upstream license is retained unchanged; no new license grant is introduced.
-
-## Replay acknowledgment and write failures
-
-A 200/201 HTTP status alone does not dequeue a reading. The receiver must return
-bounded JSON with boolean `accepted` and `duplicate` fields, exactly one true.
-Malformed, contradictory, oversized or missing acknowledgments retain the queue.
-An offline or unsuccessful attempt does not rewrite the outbox. When records
-are processed, the client stages the remaining queue in a unique private file,
-flushes and fsyncs it, then atomically replaces the outbox. A replace failure
-preserves the previous queue so accepted records can be safely replayed.
-This remains single-writer, with no power-loss or malicious-server guarantee.
+[PROVENANCE.md](PROVENANCE.md) records the upstream migration and AI-assisted
+implementation history. Existing license notices are retained. No hardware test
+results, production availability measurements or ML accuracy are claimed.
