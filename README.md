@@ -111,7 +111,9 @@ process-liveness probe; it does not certify storage readiness.
 - Receipt-based health has healthy, stale, offline and unknown states. Migrated
   readings without receipt timestamps stay unknown; the system does not invent history.
 - Strict finite measurements, timezone-aware timestamps, exact fields, duplicate-key
-  rejection and a 4 KiB request budget. API authentication uses constant-time comparison.
+  rejection and a 4 KiB request budget. API authentication uses constant-time comparison
+  and rejects duplicate API-key headers. Ingestion rejects duplicate/nondecimal
+  Content-Length and Transfer-Encoding to avoid ambiguous HTTP request framing.
 - Queue records are removed only after a valid bounded JSON acknowledgment.
   Unique, flushed staging files preserve the old outbox if replacement fails.
 - JSON logs contain request ID, method, status and latency, **not** API keys or payloads.
@@ -123,7 +125,7 @@ process-liveness probe; it does not certify storage readiness.
 python -m unittest discover -s . -v
 ```
 
-**30 tests passed locally** for this feature, including concurrent duplicate delivery,
+The regression suite covers concurrent duplicate delivery,
 restart persistence, receipt-clock health, rule changes, invalid JSON, auth/error
 contracts, replay write failures, bounded retry and a real HTTP outage/reconnect demo.
 [GitHub Actions](https://github.com/koushikchowdary6/edgewatch-iot/actions/workflows/ci.yml)
