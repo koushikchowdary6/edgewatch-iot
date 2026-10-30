@@ -2,12 +2,30 @@
 import argparse
 import json
 import os
+import stat
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
+
+# Bound memory consumed by an untrusted or accidentally oversized local queue.
+# Oversized queues remain untouched until the operator rotates/repairs them.
+MAX_OUTBOX_BYTES = 8_000_000
+
+
+def _read_outbox(path):
+    """Read only a bounded regular outbox; never follow a symlink or block on a FIFO."""
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
+    fd = os.open(path, flags)
+    with os.fdopen(fd, 'rb') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('Outbox must be a regular file')
+        data = stream.read(MAX_OUTBOX_BYTES + 1)
+    if len(data) > MAX_OUTBOX_BYTES:
+        raise ValueError('Outbox exceeds byte budget; rotate or repair it before replay')
+    return data.decode('utf-8')
 
 
 def _quarantine(path, line, status):
@@ -18,11 +36,13 @@ def _quarantine(path, line, status):
     dropping the outbox. A crash can still duplicate a quarantine entry.
     """
     record = json.dumps({'http_status': status, 'record': line}) + '\n'
-    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, 'O_NONBLOCK', 0)
     if hasattr(os, 'O_NOFOLLOW'):
         flags |= os.O_NOFOLLOW
     fd = os.open(path, flags, 0o600)
     with os.fdopen(fd, 'a', encoding='utf-8') as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError('Quarantine must be a regular file')
         stream.write(record)
         stream.flush()
         os.fsync(stream.fileno())
@@ -33,7 +53,7 @@ def flush(path, url, key, quarantine=None):
     quarantine = Path(quarantine) if quarantine is not None else None
     if quarantine is not None and quarantine.resolve() == path.resolve():
         raise ValueError('Quarantine must differ from the outbox')
-    records = path.read_text().splitlines()
+    records = _read_outbox(path).splitlines()
     processed = 0
     sent = 0
     for line in records:
@@ -94,7 +114,7 @@ def replay_until(path, url, key, attempts=3, delay=0.25, quarantine=None):
     total = 0
     for attempt in range(attempts):
         total += flush(path, url, key, quarantine)
-        if not Path(path).read_text().strip():
+        if not _read_outbox(Path(path)).strip():
             break
         if attempt + 1 < attempts:
             time.sleep(delay * min(2 ** attempt, 4))

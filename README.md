@@ -82,6 +82,13 @@ rate-limit, conflict and server failures stay queued. Optional
 `--quarantine rejected.jsonl` moves HTTP 400/413 records aside before proceeding;
 quarantine contains original telemetry and must stay local. One writer per outbox.
 
+Replay reads only regular UTF-8 outbox files, rejects symlinks and named pipes
+on supported POSIX systems, and caps an individual outbox at 8 MB. An oversized
+or invalid queue is left untouched for inspection or rotation, never silently
+drained or truncated. The opt-in quarantine must also be a regular file; symlink
+quarantine targets are rejected on supported systems. These protections assume
+a single local writer, not hostile concurrent filesystem mutation.
+
 Sample POST `/api/samples` with `X-API-Key` and JSON:
 
 ```json
