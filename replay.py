@@ -83,6 +83,19 @@ def flush(path, url, key, quarantine=None):
                         or type(ack.get('duplicate')) is not bool
                         or ack['accepted'] == ack['duplicate']):
                     break
+                # A well-formed but unrelated HTTP 200 is not proof that
+                # *this* queued event reached the intended receiver.
+                try:
+                    expected = json.loads(line)
+                except (ValueError, TypeError):
+                    break
+                if (not isinstance(expected, dict)
+                        or not isinstance(expected.get('device'), str)
+                        or type(expected.get('seq')) is not int
+                        or type(ack.get('seq')) is not int
+                        or ack.get('device') != expected['device']
+                        or ack['seq'] != expected['seq']):
+                    break
         except urllib.error.HTTPError as error:
             # Invalid payloads cannot succeed on retry without intervention.
             # Auth, concurrency, rate-limit and server failures stay queued.

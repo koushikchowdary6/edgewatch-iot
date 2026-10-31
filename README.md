@@ -98,7 +98,7 @@ Sample POST `/api/samples` with `X-API-Key` and JSON:
 First response is HTTP 201:
 
 ```json
-{"accepted":true,"duplicate":false,"alert":"HIGH_TEMPERATURE"}
+{"accepted":true,"duplicate":false,"alert":"HIGH_TEMPERATURE","device":"sim-esp32","seq":42}
 ```
 
 An identical retry returns HTTP 200 with `accepted:false, duplicate:true`.
@@ -121,7 +121,9 @@ process-liveness probe; it does not certify storage readiness.
   rejection and a 4 KiB request budget. API authentication uses constant-time comparison
   and rejects duplicate API-key headers. Ingestion rejects duplicate/nondecimal
   Content-Length and Transfer-Encoding to avoid ambiguous HTTP request framing.
-- Queue records are removed only after a valid bounded JSON acknowledgment.
+- Queue records are removed only after a valid bounded JSON acknowledgment
+  that echoes the queued device and integer sequence. A response for another
+  event cannot silently drain this outbox; this is not cryptographic server authentication.
   Unique, flushed staging files preserve the old outbox if replacement fails.
 - JSON logs contain request ID, method, status and latency, **not** API keys or payloads.
   Dashboard counters distinguish stored events, duplicate retries and rejected POSTs.
