@@ -15,7 +15,7 @@ class ReplayFailureTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.path = Path(self.temp.name) / 'outbox.jsonl'
-        self.payload = '{"device":"sim"}\n'
+        self.payload = '{"device":"sim","seq":7}\n'
         self.path.write_text(self.payload)
 
     def test_invalid_acknowledgments_keep_queue_unchanged(self):
@@ -28,9 +28,21 @@ class ReplayFailureTests(unittest.TestCase):
                 self.assertEqual(self.path.stat().st_mtime_ns, before)
 
     def test_duplicate_acknowledgment_drains_record(self):
-        with patch('replay.urllib.request.urlopen', return_value=Response(b'{"accepted":false,"duplicate":true}')):
+        with patch('replay.urllib.request.urlopen', return_value=Response(b'{"accepted":false,"duplicate":true,"device":"sim","seq":7}')):
             self.assertEqual(flush(self.path, 'http://localhost', 'key'), 1)
         self.assertEqual(self.path.read_text(), '')
+
+    def test_unrelated_or_malformed_ack_cannot_dequeue_event(self):
+        for ack in [
+            b'{"accepted":true,"duplicate":false,"device":"other","seq":7}',
+            b'{"accepted":false,"duplicate":true,"device":"sim","seq":8}',
+            b'{"accepted":true,"duplicate":false,"device":"sim","seq":true}',
+            b'{"accepted":true,"duplicate":false,"device":"sim"}',
+        ]:
+            with self.subTest(ack=ack):
+                with patch('replay.urllib.request.urlopen', return_value=Response(ack)):
+                    self.assertEqual(flush(self.path, 'http://localhost', 'key'), 0)
+                self.assertEqual(self.path.read_text(), self.payload)
 
     def test_offline_failure_does_not_rewrite_outbox(self):
         before = self.path.stat().st_mtime_ns
@@ -39,7 +51,7 @@ class ReplayFailureTests(unittest.TestCase):
         self.assertEqual(self.path.stat().st_mtime_ns, before)
 
     def test_replace_failure_preserves_queue_and_cleans_stage(self):
-        with patch('replay.urllib.request.urlopen', return_value=Response(b'{"accepted":true,"duplicate":false}')), patch('replay.Path.replace', side_effect=OSError('disk failure')):
+        with patch('replay.urllib.request.urlopen', return_value=Response(b'{"accepted":true,"duplicate":false,"device":"sim","seq":7}')), patch('replay.Path.replace', side_effect=OSError('disk failure')):
             with self.assertRaises(OSError): flush(self.path, 'http://localhost', 'key')
         self.assertEqual(self.path.read_text(), self.payload)
         self.assertEqual(list(self.path.parent.glob('.outbox-*')), [])

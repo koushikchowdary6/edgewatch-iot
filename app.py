@@ -99,12 +99,12 @@ def ingest(db, sample, config=None, received_at=None):
             if existing[:5] != row[:5]:
                 raise ValueError('Sequence conflict: replay payload changed')
             increment(db, 'duplicates')
-            return {'accepted': False, 'duplicate': True, 'alert': existing[-1]}
+            return {'accepted': False, 'duplicate': True, 'alert': existing[-1], 'device': device, 'seq': seq}
         db.execute('INSERT INTO samples VALUES (?,?,?,?,?,?)', row)
         db.execute('INSERT INTO devices VALUES (?,?,?) ON CONFLICT(device) DO UPDATE SET last_seen=MAX(devices.last_seen, excluded.last_seen),last_seq=MAX(devices.last_seq, excluded.last_seq)', (device, received, seq))
         db.executemany('INSERT INTO alerts VALUES (?,?,?,?,?,?)', [(device, seq, kind, value, threshold, received) for kind, value, threshold in flags])
         increment(db, 'accepted')
-    return {'accepted': True, 'duplicate': False, 'alert': alert}
+    return {'accepted': True, 'duplicate': False, 'alert': alert, 'device': device, 'seq': seq}
 
 
 def snapshot(db):

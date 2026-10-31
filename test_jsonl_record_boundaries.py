@@ -24,13 +24,13 @@ class JsonlFramingTests(unittest.TestCase):
         # them as record boundaries. Only a literal LF separates JSONL rows.
         for separator in ('\u0085', '\u2028', '\u2029'):
             with self.subTest(separator=hex(ord(separator))):
-                payload = json.dumps({'note': 'before' + separator + 'after'}, ensure_ascii=False)
+                payload = json.dumps({'device': 'sim', 'seq': 7, 'note': 'before' + separator + 'after'}, ensure_ascii=False)
                 self.path.write_text(payload + '\n', encoding='utf-8')
                 requests = []
 
                 def deliver(request, timeout):
                     requests.append(request.data)
-                    return Ack(b'{"accepted":true,"duplicate":false}')
+                    return Ack(b'{"accepted":true,"duplicate":false,"device":"sim","seq":7}')
 
                 with patch('replay.urllib.request.urlopen', side_effect=deliver):
                     self.assertEqual(flush(self.path, 'http://localhost', 'key'), 1)
