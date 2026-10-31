@@ -53,7 +53,13 @@ def flush(path, url, key, quarantine=None):
     quarantine = Path(quarantine) if quarantine is not None else None
     if quarantine is not None and quarantine.resolve() == path.resolve():
         raise ValueError('Quarantine must differ from the outbox')
-    records = _read_outbox(path).splitlines()
+    # JSONL records are separated by LF, not every Unicode line-break codepoint.
+    # str.splitlines() would split valid JSON strings containing U+0085,
+    # U+2028 or U+2029, corrupting a record before delivery/quarantine.
+    raw = _read_outbox(path)
+    records = raw.split('\n') if raw else []
+    if records and records[-1] == '':
+        records.pop()  # A final LF terminates the last record; it is not a blank event.
     processed = 0
     sent = 0
     for line in records:
