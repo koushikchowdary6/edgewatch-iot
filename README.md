@@ -124,6 +124,9 @@ process-liveness probe; it does not certify storage readiness.
 - Queue records are removed only after a valid bounded JSON acknowledgment
   that echoes the queued device and integer sequence. A response for another
   event cannot silently drain this outbox; this is not cryptographic server authentication.
+  The replay parser also rejects non-finite numeric exponents and unpaired
+  Unicode surrogates in acknowledgments or queued JSON before deletion
+  ([regression tests #12](https://github.com/koushikchowdary6/edgewatch-iot/pull/12)).
   Unique, flushed staging files preserve the old outbox if replacement fails.
 - JSON logs contain request ID, method, status and latency, **not** API keys or payloads.
   Dashboard counters distinguish stored events, duplicate retries and rejected POSTs.
