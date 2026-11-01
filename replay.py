@@ -76,7 +76,7 @@ def _strict_json(value):
         # JSON permits escaped lone UTF-16 surrogates, but they are not valid
         # Unicode scalar values and cannot be serialized as UTF-8 telemetry.
         if isinstance(item, str):
-            if any('\\ud800' <= char <= '\\udfff' for char in item):
+            if any('\ud800' <= char <= '\udfff' for char in item):
                 raise ValueError('Invalid Unicode surrogate in replay JSON')
         elif isinstance(item, dict):
             for key, value in item.items():
