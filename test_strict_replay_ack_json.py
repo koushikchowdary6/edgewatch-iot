@@ -50,6 +50,30 @@ class StrictReplayAcknowledgmentTests(unittest.TestCase):
         self.assertEqual(self._flush_with_ack(ack), 0)
         self.assertEqual(self.path.read_text(), malformed)
 
+    def test_deeply_nested_acknowledgment_is_rejected_without_dequeue(self):
+        ack = (b'{"accepted":true,"duplicate":false,"device":"sensor-1",'
+               b'"seq":7,"diagnostic":' + b'[' * 65 + b'0' + b']' * 65 + b'}')
+        self.assertEqual(self._flush_with_ack(ack), 0)
+        self.assertEqual(self.path.read_text(), self.event)
+
+    def test_deeply_nested_queued_record_is_not_dequeued(self):
+        malformed = ('{"device":"sensor-1","seq":7,"meta":'
+                     + '[' * 65 + '0' + ']' * 65 + '}\n')
+        self.path.write_text(malformed)
+        ack = b'{"accepted":true,"duplicate":false,"device":"sensor-1","seq":7}'
+        self.assertEqual(self._flush_with_ack(ack), 0)
+        self.assertEqual(self.path.read_text(), malformed)
+
+    def test_brackets_inside_quoted_ack_metadata_are_not_nesting(self):
+        import json
+
+        ack = json.dumps({
+            "accepted": True, "duplicate": False, "device": "sensor-1",
+            "seq": 7, "diagnostic": "[" * 80 + '"quoted"' + "]" * 80,
+        }).encode("utf-8")
+        self.assertEqual(self._flush_with_ack(ack), 1)
+        self.assertEqual(self.path.read_text(), '')
+
     def test_unambiguous_ack_still_dequeues(self):
         ack = b'{"accepted":true,"duplicate":false,"device":"sensor-1","seq":7}'
         self.assertEqual(self._flush_with_ack(ack), 1)
