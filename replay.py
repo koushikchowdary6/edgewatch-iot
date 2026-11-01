@@ -1,6 +1,7 @@
 """Replay a synthetic device's durable local outbox; retain failed records."""
 import argparse
 import json
+import math
 import os
 import stat
 import tempfile
@@ -59,8 +60,34 @@ def _strict_json(value):
     def reject_constant(value):
         raise ValueError(f'Invalid JSON constant: {value}')
 
-    return json.loads(value, object_pairs_hook=unique_keys,
-                      parse_constant=reject_constant)
+    def finite_float(token):
+        # A syntactically valid exponent such as 1e999 overflows Python's
+        # float to infinity. Do not accept a non-finite diagnostic field as
+        # part of an acknowledgment that authorizes deleting queued data.
+        parsed = float(token)
+        if not math.isfinite(parsed):
+            raise ValueError('Non-finite replay JSON number')
+        return parsed
+
+    parsed = json.loads(value, object_pairs_hook=unique_keys,
+                        parse_constant=reject_constant, parse_float=finite_float)
+
+    def reject_surrogates(item):
+        # JSON permits escaped lone UTF-16 surrogates, but they are not valid
+        # Unicode scalar values and cannot be serialized as UTF-8 telemetry.
+        if isinstance(item, str):
+            if any('\\ud800' <= char <= '\\udfff' for char in item):
+                raise ValueError('Invalid Unicode surrogate in replay JSON')
+        elif isinstance(item, dict):
+            for key, value in item.items():
+                reject_surrogates(key)
+                reject_surrogates(value)
+        elif isinstance(item, list):
+            for value in item:
+                reject_surrogates(value)
+
+    reject_surrogates(parsed)
+    return parsed
 
 
 def _read_outbox(path):
