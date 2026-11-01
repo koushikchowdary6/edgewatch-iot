@@ -13,15 +13,41 @@ from pathlib import Path
 # Bound memory consumed by an untrusted or accidentally oversized local queue.
 # Oversized queues remain untouched until the operator rotates/repairs them.
 MAX_OUTBOX_BYTES = 8_000_000
+# A 4 KiB acknowledgment can still contain thousands of nested arrays.
+# Bound both receiver acknowledgments and queued JSON before decoding.
+MAX_REPLAY_JSON_DEPTH = 64
 
 
 def _strict_json(value):
-    """Reject ambiguous duplicate keys and non-JSON numeric constants.
+    """Reject ambiguous, nonstandard, or excessively nested JSON.
 
     A replay acknowledgment is evidence that an event was persisted. Accepting
     last-key-wins JSON could let a malformed receiver response contradict
     itself while still authorizing deletion from the local outbox.
     """
+    # JSON decoding can raise RecursionError on small but deeply nested
+    # inputs. Scan delimiters outside quoted strings before the decoder runs;
+    # leave mismatched delimiters and other syntax checks to json.loads.
+    raw = value.decode('utf-8-sig') if isinstance(value, bytes) else value
+    depth = 0
+    quoted = escaped = False
+    for char in raw:
+        if quoted:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                quoted = False
+        elif char == '"':
+            quoted = True
+        elif char in '[{':
+            depth += 1
+            if depth > MAX_REPLAY_JSON_DEPTH:
+                raise ValueError('Replay JSON exceeds nesting limit')
+        elif char in ']}':
+            depth -= 1
+
     def unique_keys(pairs):
         result = {}
         for key, item in pairs:
