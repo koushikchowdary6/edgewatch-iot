@@ -15,6 +15,28 @@ from pathlib import Path
 MAX_OUTBOX_BYTES = 8_000_000
 
 
+def _strict_json(value):
+    """Reject ambiguous duplicate keys and non-JSON numeric constants.
+
+    A replay acknowledgment is evidence that an event was persisted. Accepting
+    last-key-wins JSON could let a malformed receiver response contradict
+    itself while still authorizing deletion from the local outbox.
+    """
+    def unique_keys(pairs):
+        result = {}
+        for key, item in pairs:
+            if key in result:
+                raise ValueError('Duplicate JSON key')
+            result[key] = item
+        return result
+
+    def reject_constant(value):
+        raise ValueError(f'Invalid JSON constant: {value}')
+
+    return json.loads(value, object_pairs_hook=unique_keys,
+                      parse_constant=reject_constant)
+
+
 def _read_outbox(path):
     """Read only a bounded regular outbox; never follow a symlink or block on a FIFO."""
     flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
@@ -75,7 +97,7 @@ def flush(path, url, key, quarantine=None):
                     body = response.read(4097)
                     if len(body) > 4096:
                         break
-                    ack = json.loads(body)
+                    ack = _strict_json(body)
                 except (ValueError, UnicodeError):
                     break
                 if (not isinstance(ack, dict)
@@ -86,7 +108,7 @@ def flush(path, url, key, quarantine=None):
                 # A well-formed but unrelated HTTP 200 is not proof that
                 # *this* queued event reached the intended receiver.
                 try:
-                    expected = json.loads(line)
+                    expected = _strict_json(line)
                 except (ValueError, TypeError):
                     break
                 if (not isinstance(expected, dict)
