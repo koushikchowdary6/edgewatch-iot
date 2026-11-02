@@ -218,7 +218,13 @@ def handler(db_path, key, config=None):
                     return self.error(413, 'body_limit', 'Body must be 1..4096 bytes')
                 if self.headers.get('Transfer-Encoding'):
                     return self.error(400, 'unsupported_encoding', 'Chunked requests not supported')
-                sample = strict_json(self.rfile.read(length))
+                # A peer can advertise a larger Content-Length and close its
+                # write side after a shorter but syntactically valid JSON
+                # object. Never ingest a partial HTTP frame as a full event.
+                payload = self.rfile.read(length)
+                if len(payload) != length:
+                    return self.error(408, 'request_timeout', 'Request body incomplete or timed out')
+                sample = strict_json(payload)
                 with connect(db_path) as db:
                     result = ingest(db, sample, config)
                 self.reply(201 if result['accepted'] else 200, result)

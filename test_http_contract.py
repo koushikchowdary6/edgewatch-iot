@@ -1,5 +1,6 @@
 import http.client
 import json
+import socket
 from pathlib import Path
 import tempfile
 import threading
@@ -90,3 +91,28 @@ class HttpContractTests(unittest.TestCase):
         with self.assertRaises(urllib.error.HTTPError) as caught:urllib.request.urlopen(request)
         self.assertEqual(caught.exception.code,400)
         self.assertEqual(json.load(caught.exception)['error']['code'],'invalid_telemetry')
+
+    def test_short_body_with_overstated_content_length_is_not_ingested(self):
+        # The transmitted bytes are a valid JSON event, but the HTTP frame is
+        # incomplete. Accepting it would break receiver-side framing integrity.
+        payload = json.dumps(dict(device='sim', seq=81,
+            ts='2026-01-01T00:00:00+00:00', temperature=22, voltage=3.8)).encode()
+        connection = http.client.HTTPConnection('127.0.0.1', self.server.server_port, timeout=5)
+        try:
+            connection.putrequest('POST', '/api/samples')
+            connection.putheader('X-API-Key', 'x' * 16)
+            connection.putheader('Content-Length', str(len(payload) + 20))
+            connection.endheaders(payload)
+            # Half-close the sending side: the receiver gets EOF before the
+            # promised byte count, but can still return an HTTP response.
+            connection.sock.shutdown(socket.SHUT_WR)
+            response = connection.getresponse()
+            self.assertEqual(response.status, 408)
+            self.assertEqual(json.loads(response.read())['error']['code'], 'request_timeout')
+        finally:
+            connection.close()
+        with connect(self.path) as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM samples').fetchone()[0], 0)
+            self.assertEqual(db.execute(
+                "SELECT value FROM counters WHERE name='rejected'"
+            ).fetchone()[0], 1)
