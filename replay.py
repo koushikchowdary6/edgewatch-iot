@@ -123,6 +123,43 @@ def _quarantine(path, line, status):
         os.fsync(stream.fileno())
 
 
+
+def _confirmed_receiver_rejection(error):
+    """Require this receiver's bounded JSON error before quarantining an event.
+
+    A reverse proxy or login gateway may return HTTP 400/413 without the
+    telemetry service ever examining the payload. An HTTP status alone is
+    not enough evidence to remove a reading from the retry queue.
+    """
+    allowed = {400: {'invalid_telemetry', 'invalid_framing'},
+               413: {'body_limit'}}
+    if error.code not in allowed:
+        return False
+    headers = getattr(error, 'headers', None)
+    content_type = headers.get('Content-Type', '') if headers else ''
+    if content_type.split(';', 1)[0].strip().lower() != 'application/json':
+        return False
+    try:
+        body = error.read(4097)
+        if len(body) > 4096:
+            return False
+        payload = _strict_json(body)
+    except (ValueError, UnicodeError, OSError):
+        return False
+    if not isinstance(payload, dict) or set(payload) != {'error', 'request_id'}:
+        return False
+    details = payload['error']
+    request_id = payload['request_id']
+    return (isinstance(details, dict)
+            and set(details) == {'code', 'message'}
+            and details['code'] in allowed[error.code]
+            and isinstance(details['message'], str)
+            and isinstance(request_id, str)
+            and len(request_id) == 32
+            and all(char in '0123456789abcdef' for char in request_id))
+
+
+
 def flush(path, url, key, quarantine=None):
     path = Path(path)
     quarantine = Path(quarantine) if quarantine is not None else None
@@ -174,7 +211,7 @@ def flush(path, url, key, quarantine=None):
         except urllib.error.HTTPError as error:
             # Invalid payloads cannot succeed on retry without intervention.
             # Auth, concurrency, rate-limit and server failures stay queued.
-            if quarantine is None or error.code not in (400, 413):
+            if quarantine is None or not _confirmed_receiver_rejection(error):
                 break
             _quarantine(quarantine, line, error.code)
             processed += 1
