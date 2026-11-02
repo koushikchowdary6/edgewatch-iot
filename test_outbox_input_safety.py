@@ -1,5 +1,7 @@
 """Offline replay must not hang on special files or load unbounded queues."""
 import os
+import io
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -57,7 +59,14 @@ class OutboxInputSafetyTests(unittest.TestCase):
         target.write_text("sentinel")
         quarantine = self.root / "quarantine.jsonl"
         quarantine.symlink_to(target)
-        error = HTTPError("http://localhost/api/samples", 400, "bad telemetry", {}, None)
+        error = HTTPError(
+            "http://localhost/api/samples", 400, "bad telemetry",
+            {"Content-Type": "application/json"},
+            io.BytesIO(json.dumps({
+                "error": {"code": "invalid_telemetry", "message": "Invalid telemetry"},
+                "request_id": "a" * 32,
+            }).encode()),
+        )
         with patch("replay.urllib.request.urlopen", side_effect=error):
             with self.assertRaises(OSError):
                 flush(self.path, "http://localhost", "key", quarantine=quarantine)
