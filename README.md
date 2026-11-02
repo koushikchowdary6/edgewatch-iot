@@ -79,7 +79,7 @@ python replay.py --seed --outbox device.jsonl --attempts 3 --retry-delay 0.25
 `--seed` refuses existing outboxes. To resend retained readings, omit `--seed`.
 Retries are bounded (1–20 attempts; capped exponential delay). Authentication,
 rate-limit, conflict and server failures stay queued. Optional
-`--quarantine rejected.jsonl` moves HTTP 400/413 records aside before proceeding;
+`--quarantine rejected.jsonl` moves HTTP 400/413 records aside only when the receiver returns a bounded, valid error contract; proxy/login-page errors remain queued.
 quarantine contains original telemetry and must stay local. One writer per outbox.
 
 Replay reads only regular UTF-8 outbox files, rejects symlinks and named pipes
